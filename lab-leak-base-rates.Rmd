@@ -1,0 +1,268 @@
+---
+title: "Base rates for lab accidents causing pandemics"
+author: "Joshua Blake"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    code_folding: hide
+---
+
+```{r setup,message=FALSE,warning=FALSE}
+library(broom)
+library(dplyr)
+library(ggplot2)
+library(purrr)
+library(tidyr)
+```
+
+# Summary
+
+- I aim to estimate the base rate of lab accidents causing pandemics. By lab accidents, I mean any pandemic that was not intentional but would not have occurred without human intervention in a research setting. That could include virus hunting, gain-of-function research, or other experiments. Pandemics are defined as killing at least 1 in 100,000 of the global population, around 80,000 deaths (this is the  threshold from Marani et al. 2021).
+- I use three proxies for the amount of risky research being conducted: the number of BSL-4 labs, the number of lab accidents, and the number of virology papers published. Note that I am not attempting to quantify the actual number of lab-years contributing. These have all been growing at the same exponential rate over the past few decades, meaning that they agree on the amount of risk.
+- There have been 1 lab-leak pandemics to date: the 1977 Russian flu pandemic. COVID-19's origin is debated, and I present either scenario. I make no attempt or provide judgement on COVID-19's origin.
+- I estimate that we should expect 1 or 2 pandemics in the next decade, with around a 60% chance that at last 1 occurs. For context, the historical record suggests, in expectation, 2.5 zoonotic pandemics over the next decade.
+- I am 80% confident that this is an overestimate for the following reasons.
+  - The Russian flu pandemic was caused by labs with much less safety than modern ones.
+  - COVID-19, if it were a lab-leak, was downstream of the PREDICT virus hunting effort. The only comparable successor programme, DEEP VZN, has been cancelled.
+  - The number of virology papers being published has been declining since the second half of the 2000s, which is not included in my extrapolation of growth rates. This could indicate that less risky research is being conducted than my extrapolation suggests.
+- The main reason to think this is an underestimate is that technological advances could accelerate the rate of risky research. For example, if experimentation with viruses that could infect humans was being performed by biohackers outside of formal labortories. This could lead to a discontinuous increase in the rate of risky research, or an increase that is not captured well by the proxies I have used.
+
+# Methods
+
+To estimate the base rate, we need two quantities.
+First, the number of pandemics that lab accidents have caused.
+This can be easily found by looking at the historic record.
+Second, a measure of the amount of lab experiments that could cause such a pandemic; I refer to this as "risky research units".
+I then extrapolate research units into the future to forecast a base rate for lab accidents causing pandemics.
+
+No good data exists on risky research units directly.
+However, by applying a continuous time [Gamma-Poisson model](https://joshuablake.co.uk/blog/gamma-poisson/) we only need a measure that is proportional to the number of experiments.
+
+# Measuring risky research units
+Two ways of measuring risky research units that can be found publically are the number of BSL-4 labs ([GlobalBioLabs 2023](https://static1.squarespace.com/static/62fa334a3a6fe8320f5dcf7e/t/6412d3120ee69a4f4efbec1f/1678955285754/KCL0680_BioLabs+Report_Digital.pdf)) and the number of known lab accidents ([Manheim and Lewis 2022](https://f1000research.com/articles/10-752)).
+These appear to be growing at roughly the same rate, as seen by fitting either separate or joint Poisson regressions to the datasets.
+
+```{r}
+incident_counts = readr::read_csv("2023-08_lab-leaks/lab-accidents.csv", show_col_types = FALSE) |>
+    filter(!is.na(Year))  |> # Extra rows added when copying from web
+    mutate(
+        year = case_match(
+            Year,
+            "Late 1970s" ~ 1977,
+            .default = suppressWarnings(as.integer(stringr::str_sub(Year, end = 4)))
+        )
+    ) |>
+    assertr::assert(assertr::not_na, year) |>
+    count(year) |>
+    complete(
+        year = 1975:2016,
+        fill = list(n = 0)
+    ) |>
+    mutate(type = "Lab accidents")
+
+lab_counts = readr::read_csv("2023-08_lab-leaks/bsl4.csv", show_col_types = FALSE) |>
+    group_by(year = floor(year)) |>
+    summarise(labs = floor(min(labs))) |>
+    transmute(
+        year,
+        `New BSL4 labs` = labs - lag(labs),
+    ) |>
+    pivot_longer(-year, names_to = "type", values_to = "n") |>
+    filter(!is.na(n))
+web_of_science_counts = readr::read_tsv("2023-08_lab-leaks/web-of-science.tsv") |>
+    rename(year = `Publication Years`, n = `Record Count`) |>
+    complete(
+        year = 1953:2022,
+        fill = list(n = 0)
+    ) |>
+    select(year, n) |>
+    filter(year <= 2022) |>
+    mutate(type = "Web of Science articles")
+
+all_counts = bind_rows(
+    incident_counts,
+    lab_counts,
+    web_of_science_counts,
+)
+
+fit_counts = bind_rows(
+    incident_counts,
+    lab_counts,
+    web_of_science_counts |> filter(year <= 2010),
+)
+
+tbl_models = fit_counts |>
+    nest(data = !type) |>
+    mutate(
+        fit = map(data, ~glm(n ~ year, data = .x, family = "poisson")),
+    ) |>
+    add_row(
+        type = "Joint",
+        fit = list(glm(n ~ year + type, data = fit_counts, family = "poisson")),
+    ) |>
+    mutate(
+        fit_aug = map(fit, broom::augment, se_fit = TRUE),
+        fit_tidy = map(fit, broom::tidy, conf.int = TRUE),
+    ) |>
+    rename(model_type = type)
+final_growth_rate = tbl_models |>
+    unnest(fit_tidy) |>
+    filter(term == "year", model_type == "Joint") |>
+    assertr::verify(length(estimate) == 1) |>
+    pull(estimate)
+```
+
+```{r}
+tbl_models |>
+    unnest(fit_aug) |>
+    mutate(
+        type = if_else(is.na(type), model_type, type),
+        .fitted.n = exp(.fitted),
+        ymin = qpois(0.025, exp(.fitted)),
+        ymax = qpois(0.975, exp(.fitted)),
+    ) |>
+    # mutate(across(c(ymin, ymax, n, .fitted.n), ~.x / max(n)), .by = type) |>
+    ggplot(aes(year, .fitted.n)) +
+    geom_line(aes(color = model_type)) +
+    geom_ribbon(
+        aes(year, ymin = ymin, ymax = ymax, fill = model_type),
+        alpha = 0.3,
+    ) +
+    geom_point(aes(year, n), data = all_counts) +
+    facet_wrap(~type, scales = "free_y") +
+    theme_minimal()
+```
+
+An alternative proxy would be the number of virology papers published.
+Below shows the number of papers published per year on virology according to Web of Science.
+This grows faster than the above, but appears to be leveling off since 2010.
+The exponential fit is only to do data up until 2010.
+
+```{r}
+fit_wos = glm(n ~ year, data = filter(web_of_science_counts, year <= 2010), family = "poisson")
+augment(fit_wos, type.predict = "response", newdata = web_of_science_counts) |>
+    ggplot(aes(year, .fitted)) +
+    geom_line() +
+    geom_point(aes(year, n)) +
+    geom_ribbon(
+        aes(year, ymin = qpois(0.025, .fitted), ymax = qpois(0.975, .fitted)),
+        alpha = 0.3,
+    ) +
+    theme_minimal() +
+    labs(
+        x = "Year",
+        y = "Number of papers published"
+    )
+```
+
+Comparing the growth rates from each model (which determines the number of risky research units), we see that the number of new labs and the number of lab accidents are growing at roughly the same rate.
+
+```{r}
+tbl_models |>
+    unnest(fit_tidy) |>
+    filter(term == "year") |>
+    ggplot(aes(estimate, model_type, xmin = estimate - 1.96 * std.error, xmax = estimate + 1.96 * std.error)) +
+    geom_pointrange() +
+    theme_minimal() +
+    labs(
+        x = "Growth rate",
+        y = "Model"
+    )
+```
+
+I define 1 risky research unit as the amount of risk research occuring in 2023.
+Therefore, the number of risk research units in a year $t$ is $\exp(r (t-2023))$.
+The total number of risky reserach units between year $a$ (inclusive) and $b$ (exclusive) is $\int_a^b \exp(r (t-2023)) dt = \frac{1}{r} e^{r (a-2023)} (e^{r (b-a)} - 1)$ where $r$ is the growth rate. 
+Since these models assume exponential growth, the amount of risky research effort up to and including 2020 is $\int_{-\infty}^{2023} e^{r (t-2020)} dt = \frac{1}{r}$.
+Using the joint model, this gives a total of `r round(1/final_growth_rate, 1)` risky research units.
+
+
+# Forecast
+One lab risk pandemic has occurred to date: the 1977 Russian flu pandemic.
+COVID-19's origin is debated, and I present either scenario.
+
+The forecast will be based on three quantites.
+These can be calculated from the historic record, and the growth rate of risky research units $r$ estimated above.
+
+- The number of risky research units conducted up until the time used for calculating the base rate, $t_b$. We will normalise this to 1, meaning that we define the number of units as $u(t) = r \exp(r(t-t_b))$. This gives the total risky research units conducted up until $t_b$ as $\int_{-\infty}^{t_b} u(t) dt = \exp(0) - \exp(-\infty) = 1$.
+- The number of risky research units conducted in the period we are predicting, from $t_0$ for $d$ years. This is $u_p = \int_{t_0}^{t_0+d} u(t) dt = \exp(r(t_0+d-t_b)) - \exp(r(t_0-t_b)) = \exp(r(t_0-t_b)) (\exp(rd) - 1)$.
+- The number of lab-leak pandemics that have occurred in the period used for calculating the base rate.
+
+The estimate for the expected number of lab-leak pandemics per risky research unit (using a Gamma(1/3, 1/3) prior) is Gamma(a+1/3, 1).
+The expected number of lab-leak pandemics over the period of interest is $u_p(a + 1/3)$.
+The probability of there being at least one pandemic is $1 - 1 / (1 + u_p)^(a + 1/3)$.
+
+This gives the following results, with r = `r final_growth_rate`
+```{r}
+r = final_growth_rate
+leak_risks = tribble(
+    ~Scenario, ~a, ~tb, 
+    "No pandemics", 0, 2022,
+    "Pre-COVID", 1, 2019,
+    "COVID zoonotic", 1, 2022,
+    "COVID lab-leak", 2, 2022,
+) |>
+    mutate(
+        t0 = 2024,
+        d = 10,
+        up = exp(r * (t0 - tb)) * (expm1(r * d)),
+        E_lab_leaks = up * (a + 1/3),
+        p_gte1_lab_leaks = 1 - 1 / (1 + up) ^ (a + 1/3),
+    )
+leak_risks
+```
+
+For comparison, Marani et al. (2021) suggests 2.5 zoonotic pandemics per decade, although this rate may have decreased since World War II.
+
+Below I show how the rate is changing over time due to the change in risky research units.
+
+```{r}
+leak_risks |>
+    cross_join(tibble(t = 2010:2050)) |>
+    mutate(
+        E_lab_leak_pandemics = r * exp(r * (t - tb)) * (a + 1/3),
+    ) |>
+    ggplot(aes(t, E_lab_leak_pandemics, color = Scenario)) +
+    geom_line() +
+    geom_hline(aes(colour = "E(zoonotic pandemics)", yintercept = 0.25)) +
+    theme_minimal()
+```
+
+# Discussion and conclusion
+
+# Breakpoint analysis
+
+```{r}
+library(segmented)
+all_counts |>
+    ggplot(aes(year, n)) +
+    geom_point() +
+    facet_wrap(~type, scales = "free_y")
+break_fit = segmented(
+    obj = MASS::glm.nb(
+        n ~ year + type,
+        data = all_counts
+    ),
+    seg.Z = ~year,
+    psi = c(1990, 2010)
+)
+summary(break_fit)
+plot(break_fit)
+augment(break_fit, newdata = all_counts, type.predict = "response") |>
+    ggplot(aes(year, .fitted)) +
+    geom_line() +
+    geom_point(aes(year, n)) +
+    geom_ribbon(
+        aes(
+            ymin = qnbinom(0.025, mu = .fitted, size = break_fit$theta),
+            ymax = qnbinom(0.975, mu = .fitted, size = break_fit$theta),
+        ),
+        alpha = 0.3,
+    ) +
+    theme_minimal() +
+    facet_wrap(~type, scales = "free_y") +
+    labs(
+        x = "Year",
+        y = "Count"
+    )
+```
