@@ -1,0 +1,4 @@
+html_document:
+  self_contained: false
+  code_folding: hide
+  lib_dir: "outputs/libs"

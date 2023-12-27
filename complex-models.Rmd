@@ -1,0 +1,175 @@
+---
+title: "Extended models for lab accidents"
+author: "Joshua Blake"
+date: "`r Sys.Date()`"
+---
+
+
+# Breakpoint analysis
+
+The plots above suggest the rate of growth is changing.
+Here, I allow two breakpoints in the rate.
+A more parsimonious model would be a sigmoid, but I failed to fit one to the data...
+
+```{r}
+library(segmented)
+all_counts |>
+    ggplot(aes(year, n)) +
+    geom_point() +
+    facet_wrap(~type, scales = "free_y")
+break_fit = segmented(
+    obj = MASS::glm.nb(
+        n ~ year + type,
+        data = all_counts
+    ),
+    seg.Z = ~year,
+    psi = c(1990, 2010)
+)
+summary(break_fit)
+augment(break_fit, newdata = all_counts, type.predict = "response") |>
+    ggplot(aes(year, .fitted)) +
+    geom_line() +
+    geom_point(aes(year, n)) +
+    geom_ribbon(
+        aes(
+            ymin = qnbinom(0.025, mu = .fitted, size = break_fit$theta),
+            ymax = qnbinom(0.975, mu = .fitted, size = break_fit$theta),
+        ),
+        alpha = 0.3,
+    ) +
+    theme_minimal() +
+    facet_wrap(~type, scales = "free_y") +
+    labs(
+        x = "Year",
+        y = "Count"
+    )
+```
+
+# Bayesian
+
+## Exponential
+
+```{r}
+library(brms)
+exp_fit = brm(
+    n ~ I(year-2000) + type + (I(year-2000) - 1 | type) - 1,
+    data = fit_counts,
+    family = "poisson",
+    cores = 4,
+    prior = prior(normal(0, 0.1), coef = "IyearM2000") +
+        prior(exponential(100), class = "sd"),
+    init = 0
+)
+summary(exp_fit)
+library(tidybayes)
+all_counts |>
+    add_predicted_draws(exp_fit) |>
+    median_qi() |>
+    ggplot(aes(year, .prediction, ymin = .lower, ymax = .upper)) +
+    geom_lineribbon(alpha = 0.3) +
+    geom_point(aes(y = n)) +
+    facet_wrap(~type, scales = "free_y") +
+    theme_minimal()
+```
+
+## Sigmoid
+
+```{r}
+sig_fit_wos = brm(
+    bf(
+        n ~ exp(a) * inv_logit(b * ((year - 1950) - c)),
+        a + b + c ~ 1,
+        # max ~ type - 1,
+        nl = TRUE
+    ),
+    data = filter(all_counts, type == "Web of Science articles"),
+    prior = prior(normal(0, 0.1), nlpar = "b") +
+        prior(exponential(0.01), nlpar = "c", lb = 0) + 
+        prior(normal(0, 10), nlpar = "a"),
+    family = poisson("identity"),
+    cores = 4,
+    init = function() list(
+        a = log(9000),
+        b = 0.05,
+        c = 30
+    )
+)
+summary(sig_fit_wos)
+all_counts |>
+    add_predicted_draws(sig_fit_wos) |>
+    median_qi() |>
+    ggplot(aes(year, .prediction, ymin = .lower, ymax = .upper)) +
+    geom_lineribbon(alpha = 0.3) +
+    geom_point(aes(y = n)) +
+    facet_wrap(~type, scales = "free_y") +
+    theme_minimal()
+```
+
+
+```{r}
+sig_fit = brm(
+    bf(
+        n ~ exp(a) * inv_logit(b * ((year - 1950) - c)),
+        b + c ~ 1,
+        a ~ type - 1,
+        nl = TRUE
+    ),
+    data = all_counts,
+    prior = prior(normal(0, 0.1), nlpar = "b") +
+        prior(exponential(0.01), nlpar = "c", lb = 0) + 
+        prior(normal(0, 10), nlpar = "a"),
+    family = poisson("identity"),
+    cores = 4,
+    init = function() list(
+        a = log(9000),
+        b = 0.05,
+        c = 30
+    )
+)
+summary(sig_fit)
+all_counts |>
+    add_predicted_draws(sig_fit) |>
+    median_qi() |>
+    ggplot(aes(year, .prediction, ymin = .lower, ymax = .upper)) +
+    geom_lineribbon(alpha = 0.3) +
+    geom_point(aes(y = n)) +
+    facet_wrap(~type, scales = "free_y") +
+    theme_minimal()
+```
+
+Yay, a working fit!
+However, the latest flattening looks suspiciously like the one in the 1990s.
+Lets add overdispersion.
+    
+```{r}
+sig_fit_nb = brm(
+    bf(
+        n ~ exp(a) * inv_logit(b * ((year - 1950) - c)),
+        b + c ~ 1,
+        a ~ type - 1,
+        nl = TRUE
+    ),
+    data = all_counts,
+    prior = prior(normal(0, 0.1), nlpar = "b") +
+        prior(exponential(0.01), nlpar = "c", lb = 0) + 
+        prior(normal(0, 10), nlpar = "a"),
+    family = negbinomial("identity"),
+    cores = 4,
+    init = function() list(
+        a = log(9000),
+        b = 0.05,
+        c = 30
+    )
+)
+summary(sig_fit_nb)
+all_counts |>
+    add_predicted_draws(sig_fit_nb) |>
+    median_qi() |>
+    ggplot(aes(year, .prediction, ymin = .lower, ymax = .upper)) +
+    geom_lineribbon(alpha = 0.3) +
+    geom_point(aes(y = n)) +
+    facet_wrap(~type, scales = "free_y") +
+    theme_minimal()
+```
+
+Now I look at the virology plot more closely, it does look a lot like a couple of steps (one in late 1980s and one around 2005) with plateuing in between.
