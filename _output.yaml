@@ -1,7 +1,7 @@
 html_document:
   self_contained: false
   code_folding: hide
-  lib_dir: "outputs/libs"
+  lib_dir: "docs/libs"
   toc: true
   toc_float: true
   fig_caption: true

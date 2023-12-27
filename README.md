@@ -13,7 +13,7 @@ Reports included:
 - lab-leak-base-rates.Rmd: the main Rmd file containing the analysis for the blogpost.
 - complex-models.Rmd: some additional work-in-progress models based on sigmoids to account for the flattening rate of virology papers.
 
-The folder `outputs` is generated, and [is viewable online](https://joshuablake.co.uk/lab-leak-base-rate/lab-leak-base-rates.html).
+The folder `docs` is generated, and [is viewable online](https://joshuablake.co.uk/lab-leak-base-rate/lab-leak-base-rates.html).
 
 All code is available under [the MIT license](https://choosealicense.com/licenses/mit/).
 The data's status is determined by the original sources.
