@@ -10,7 +10,6 @@ library(dplyr)
 library(ggplot2)
 library(purrr)
 library(tidyr)
-knitr::opts_chunk$set(fig.width = 10)
 ```
 
 # Summary
