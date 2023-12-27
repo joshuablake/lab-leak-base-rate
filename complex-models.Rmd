@@ -4,6 +4,60 @@ author: "Joshua Blake"
 date: "`r Sys.Date()`"
 ---
 
+Work-in-progress sigmoid models.
+Use at your own risk.
+
+```{r setup, include=FALSE}
+library(broom)
+library(dplyr)
+library(ggplot2)
+library(purrr)
+library(tidyr)
+knitr::opts_chunk$set(fig.width = 10)
+
+incident_counts = readr::read_csv(here::here("data/lab-accidents.csv"), show_col_types = FALSE) |>
+    filter(!is.na(Year))  |> # Extra rows added when copying from web
+    mutate(
+        year = case_match(
+            Year,
+            "Late 1970s" ~ 1977,
+            .default = suppressWarnings(as.integer(stringr::str_sub(Year, end = 4)))
+        )
+    ) |>
+    assertr::assert(assertr::not_na, year) |>
+    count(year) |>
+    complete(
+        year = 1975:2016,
+        fill = list(n = 0)
+    ) |>
+    mutate(type = "Lab accidents")
+
+lab_counts = readr::read_csv(here::here("data/bsl4.csv"), show_col_types = FALSE) |>
+    group_by(year = floor(year)) |>
+    summarise(labs = floor(min(labs))) |>
+    transmute(
+        year,
+        `New BSL4 labs` = labs - lag(labs),
+    ) |>
+    pivot_longer(-year, names_to = "type", values_to = "n") |>
+    filter(!is.na(n))
+web_of_science_counts = readr::read_tsv(here::here("data/web-of-science.tsv")) |>
+    rename(year = `Publication Years`, n = `Record Count`) |>
+    complete(
+        year = 1953:2022,
+        fill = list(n = 0)
+    ) |>
+    select(year, n) |>
+    filter(year <= 2022) |>
+    mutate(type = "Web of Science articles")
+
+all_counts = bind_rows(
+    incident_counts,
+    lab_counts,
+    web_of_science_counts,
+)
+```
+
 
 # Breakpoint analysis
 
