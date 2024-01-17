@@ -6,3 +6,4 @@ html_document:
   toc_float: true
   fig_caption: true
   fig_width: 10
+  df_print: paged

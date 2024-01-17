@@ -5,6 +5,7 @@ date: "`r Sys.Date()`"
 ---
 
 ```{r setup,message=FALSE,warning=FALSE}
+make_blog_figs = TRUE
 library(broom)
 library(dplyr)
 library(ggplot2)
@@ -12,17 +13,8 @@ library(purrr)
 library(tidyr)
 ```
 
-# Summary
-
-- I aim to estimate the base rate of lab accidents causing pandemics. By lab accidents, I mean any pandemic that was not intentional but would not have occurred without human intervention in a research setting. That could include virus hunting, gain-of-function research, or other experiments. Pandemics are defined as killing at least 1 in 100,000 of the global population, around 80,000 deaths (this is the  threshold from Marani et al. 2021).
-- I use three proxies for the amount of risky research being conducted: the number of BSL-4 labs, the number of lab accidents, and the number of virology papers published. Note that I am not attempting to quantify the actual number of lab-years contributing. These have all been growing at the same exponential rate over the past few decades, meaning that they agree on the amount of risk.
-- There have been 1 lab-leak pandemics to date: the 1977 Russian flu pandemic. COVID-19's origin is debated, and I present either scenario. I make no attempt or provide judgment on COVID-19's origin.
-- I estimate that we should expect 1 or 2 pandemics in the next decade, with around a 60% chance that at least 1 occurs. For context, the historical record suggests, in expectation, 2.5 zoonotic pandemics over the next decade.
-- I am 80% confident that this is an overestimate for the following reasons.
-  - The Russian flu pandemic was caused by labs with much less safety than modern ones.
-  - COVID-19, if it were a lab-leak, was downstream of the PREDICT virus hunting effort. The only comparable successor programme, DEEP VZN, has been canceled.
-  - The number of virology papers being published has been declining since the second half of the 2000s, which is not included in my extrapolation of growth rates. This could indicate that less risky research is being conducted than my extrapolation suggests.
-- The main reason to think this is an underestimate is that technological advances could accelerate the rate of risky research. For example, if experimentation with viruses that could infect humans was being performed by biohackers outside of formal laboratories. This could lead to a discontinuous increase in the rate of risky research, or an increase that is not captured well by the proxies I have used.
+This document provides the mathematical details and code for the analysis ["Forecasting accidentally-caused pandemics"](https://open.substack.com/pub/deconfusiondevice/p/forecasting-accidentally-caused-pandemics?r=11048&utm_campaign=post&utm_medium=web).
+Source code and data [available on GitHub](https://github.com/joshuablake/lab-leak-base-rate).
 
 # Methods
 
@@ -33,9 +25,10 @@ Second, a measure of the amount of lab experiments that could cause such a pande
 I then extrapolate research units into the future to forecast a base rate for lab accidents causing pandemics.
 
 No good data exists on risky research units directly.
-However, by applying a continuous time [Gamma-Poisson model](https://joshuablake.co.uk/blog/gamma-poisson/) we only need a measure that is proportional to the number of experiments.
+However, by applying a continuous time [Gamma-Poisson model](https://blog.joshuablake.co.uk/p/gamma-poisson) we only need a measure that is proportional to the number of experiments.
 
-# Measuring risky research units
+## Measuring risky research units
+
 I consider three proxies for the number of risky research units being conducted.
 First, the number of BSL-4 labs ([GlobalBioLabs 2023](https://static1.squarespace.com/static/62fa334a3a6fe8320f5dcf7e/t/6412d3120ee69a4f4efbec1f/1678955285754/KCL0680_BioLabs+Report_Digital.pdf)).
 I transform this into the net increase in labs per year to reduce autocorrelation.
@@ -134,8 +127,8 @@ tbl_models |>
     theme_minimal()
 ```
 
-```{r,eval=FALSE,fig.cap="Poisson regression from fitting to each time series individually."}
-tbl_models |>
+```{r,eval=make_blog_figs,fig.cap="Poisson regression from fitting to each time series individually."}
+p = tbl_models |>
     filter(model_type == "Joint") |>
     unnest(fit_aug) |>
     mutate(
@@ -158,7 +151,8 @@ tbl_models |>
         y = "Number of events"
     )
     ggsave(
-        here::here("outputs/poisson-regression.png"),
+        here::here("docs/poisson-regression.png"),
+        plot = p,
         width = 15,
         height = 10,
         units = "cm",
@@ -166,22 +160,6 @@ tbl_models |>
     )
 ```
 
-```{r,eval=FALSE}
-fit_wos = glm(n ~ year, data = filter(web_of_science_counts, year <= 2010), family = "poisson")
-augment(fit_wos, type.predict = "response", newdata = web_of_science_counts) |>
-    ggplot(aes(year, .fitted)) +
-    geom_line() +
-    geom_point(aes(year, n)) +
-    geom_ribbon(
-        aes(year, ymin = qpois(0.025, .fitted), ymax = qpois(0.975, .fitted)),
-        alpha = 0.3,
-    ) +
-    theme_minimal() +
-    labs(
-        x = "Year",
-        y = "Number of papers published"
-    )
-```
 
 ```{r,fig.cap="Growth rates from fitting to each time series either individually or jointly."}
 tbl_models |>
@@ -197,6 +175,7 @@ tbl_models |>
 ```
 
 # Forecast
+
 One lab risk pandemic has occurred to date: the 1977 Russian flu pandemic.
 COVID-19's origin is debated, and I present either scenario.
 
@@ -210,8 +189,11 @@ These can be calculated from the historic record, and the growth rate of risky r
 The estimate for the expected number of lab-leak pandemics per risky research unit (using a Gamma(1/3, 1/3) prior) is Gamma(a+1/3, 1).
 The expected number of lab-leak pandemics over the period of interest is $u_p(a + 1/3)$.
 The probability of there being at least one pandemic is $1 - 1 / (1 + u_p)^(a + 1/3)$.
+[See here for justification of the prior and the formulae giving these results.](https://blog.joshuablake.co.uk/p/gamma-poisson)
 
-This gives the following results, with r = `r final_growth_rate`
+This gives the following results, with r = `r final_growth_rate` (a `r round(100 * final_growth_rate * log10(exp(1)), 1)`% increase per year).
+
+
 ```{r}
 r = final_growth_rate
 leak_risks = tribble(
@@ -224,6 +206,15 @@ leak_risks = tribble(
     mutate(
         t0 = 2024,
         d = 10,
+    ) |>
+    add_row(
+        Scenario = "Risk between 1977 and now",
+        a = 1,
+        tb = 1977,
+        t0 = 1978,
+        d = 2024 - 1978,
+    ) |>
+    mutate(
         up = exp(r * (t0 - tb)) * (expm1(r * d)),
         E_lab_leaks = up * (a + 1/3),
         p_gte1_lab_leaks = 1 - 1 / (1 + up) ^ (a + 1/3),
@@ -235,7 +226,7 @@ Full probability distributions
 
 ```{r}
 prob_dist = leak_risks |>
-    cross_join(tibble(n = 0:10)) |>
+    cross_join(tibble(n = 0:59)) |>
     mutate(p = dnbinom(n, a + 1/3, 1 / (up + 1))) |>
     pivot_wider(
         names_from = Scenario,
@@ -257,7 +248,7 @@ For comparison, Marani et al. (2021) suggests 2.5 zoonotic pandemics per decade,
 Below I show how the rate is changing over time due to the change in risky research units.
 
 ```{r}
-leak_risks |>
+p_gg = leak_risks |>
     cross_join(tibble(time = 2010:2050)) |>
     mutate(
         E_lab_leak_pandemics = r * exp(r * (time - tb)) * (a + 1/3),
@@ -266,4 +257,40 @@ leak_risks |>
     geom_line() +
     geom_hline(aes(colour = "E(zoonotic pandemics)", yintercept = 0.25)) +
     theme_minimal()
+plotly::ggplotly(p_gg)
+```
+
+```{r,eval=make_blog_figs}
+p = leak_risks |>
+    mutate(
+        n_prev = case_match(
+            Scenario,
+            "COVID zoonotic" ~ "1 previous lab leak",
+            "COVID lab-leak" ~ "2 previous lab leaks",
+        ) |>
+            as.factor(),
+    ) |>
+    filter(!is.na(n_prev)) |>
+    cross_join(tibble(time = 2010:2035)) |>
+    mutate(
+        E_lab_leak_pandemics = r * exp(r * (time - tb)) * (a + 1/3),
+    ) |>
+    ggplot(aes(time, E_lab_leak_pandemics, color = n_prev)) +
+    geom_line() +
+    geom_hline(aes(colour = "Historic average", yintercept = 0.25)) +
+    theme_minimal() +
+    labs(
+        x = "Year",
+        y = "Expected number of pandemics",
+        colour = ""
+    ) +
+    theme(legend.position = "bottom")
+ggsave(
+    here::here("docs/forecast.png"),
+    plot = p,
+    width = 15,
+    height = 10,
+    units = "cm",
+    dpi = 200
+)
 ```
